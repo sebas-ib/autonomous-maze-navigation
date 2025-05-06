@@ -25,7 +25,7 @@ using namespace Pololu3piPlus32U4;
 #define kdVel 100 //Tune Kd here
 #define kiVel 0.025 //Tune Ki here
 #define clamp_iVel 100 //Tune ki integral clamp here
-#define base_speed 150
+#define base_speed 120
 
 Motors motors;
 Encoders encoders;
@@ -49,6 +49,8 @@ float prevy = 0;
 float path_distance = 0.0;
 
 const double distFromWall=10.0; 
+unsigned int lineSensorValues[5];
+
 
 double wallDist;
 
@@ -60,14 +62,14 @@ void calibrateSensors()
   //Implement calibration for IR Sensors
   //Hint: Have your robot turn to the left and right to calibrate sensors.
   for (int i = 0; i < 100; i++) {
-      motors.setSpeeds(50, -50);  // Rotate right
+      motors.setSpeeds(150, -150);  // Rotate right
       lineSensors.calibrate();
-      delay(25);
+      delay(2);
   }
   for (int i = 0; i < 100; i++) {
-      motors.setSpeeds(-50, 50);  // Rotate left
+      motors.setSpeeds(-150, 150);  // Rotate left
       lineSensors.calibrate();
-      delay(25);
+      delay(2);
   }
   motors.setSpeeds(0, 0);  // Stop
 }
@@ -77,7 +79,7 @@ void setup() {
   servo.attach(5);
   calibrateSensors();
   motors.setSpeeds(50, 50);
-  delay(1500);
+  delay(3500);
   servo.write(0);
   // prev_time = millis();
 }
@@ -120,7 +122,7 @@ bool avoidObstacle(RobotState current_state){
   }
 }
 
-bool collectTrash(){
+bool collectTrash(RobotState current_state){
   if (path_distance >= 20) {
     motors.setSpeeds(0, 0);
     delay(250);
@@ -147,6 +149,20 @@ bool collectTrash(){
   }
 }
 
+bool blackIrReading(){
+  lineSensors.readCalibrated(lineSensorValues);
+  int len = sizeof(lineSensorValues) / sizeof(lineSensorValues[0]);
+
+  float sum = 0;
+  for (int i = 0; i < len; i++) {
+    if (lineSensorValues[i] > 900) {
+      return true;
+    }
+  }
+  return false;
+
+}
+
 void loop() {
   updateOdom();
   switch (robot_state){
@@ -161,7 +177,12 @@ void loop() {
       prevx = x;
       prevy = y;
 
+      if (blackIrReading()){
+        motors.setSpeeds(200, -200);
+        delay(5000);
+      }
       avoidObstacle(robot_state);
+
 
       wallDist = sonar.readDist();
 
@@ -183,8 +204,8 @@ void loop() {
 
       motors.setSpeeds(left_speed, right_speed);
     }
-    case COLLECT_TRASH {
-      System.println(lineSensors.)
+    case COLLECT_TRASH: {
+
     }
   }
 }
