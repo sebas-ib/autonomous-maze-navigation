@@ -1,6 +1,3 @@
-
-// This is our second solution after we couldn't get our 2d array mapping using BFS to work, this is the wall following approach
-
 #include <Pololu3piPlus32U4.h>
 #include <Servo.h>
 #include "sonar.h"
@@ -21,9 +18,9 @@ using namespace Pololu3piPlus32U4;
 //Update kp and kd based on your testing
 #define minOutputVel -100
 #define maxOutputVel 100
-#define kpVel 15 //Tune Kp here
-#define kdVel 100 //Tune Kd here
-#define kiVel 0.025 //Tune Ki here
+#define kpVel 10 //Tune Kp here
+#define kdVel 0 //Tune Kd here
+#define kiVel 0 //Tune Ki here
 #define clamp_iVel 100 //Tune ki integral clamp here
 #define base_speed 120
 
@@ -46,6 +43,8 @@ enum RobotState { RIGHT_FOLLOW, OBSTACLE_AVOIDANCE, LEFT_FOLLOW, COLLECT_TRASH, 
 RobotState robot_state = RIGHT_FOLLOW;
 RobotState prev_state = RIGHT_FOLLOW;
 RobotState last_state = robot_state;
+RobotState last_wall_follow_state = RIGHT_FOLLOW;
+
 
 
 Odometry odometry(diaL, diaR, w, nL, nR, gearRatio, DEAD_RECKONING);
@@ -64,6 +63,7 @@ float path_distance = 0.0;
 const double distFromWall=10.0; 
 unsigned int lineSensorValues[5];
 bool trash_detection_enabled = true;
+bool home_detection_enabled = true;
 bool return_turn_complete = false;
 
 
@@ -81,15 +81,15 @@ void calibrateSensors()
   //TASK 2.1a
   //Implement calibration for IR Sensors
   //Hint: Have your robot turn to the left and right to calibrate sensors.
-  for (int i = 0; i < 100; i++) {
+  for (int i = 0; i < 50; i++) {
       motors.setSpeeds(150, -150);  // Rotate right
       lineSensors.calibrate();
-      delay(2);
+      delay(1);
   }
-  for (int i = 0; i < 100; i++) {
+  for (int i = 0; i < 50; i++) {
       motors.setSpeeds(-150, 150);  // Rotate left
       lineSensors.calibrate();
-      delay(2);
+      delay(1);
   }
   motors.setSpeeds(0, 0);  // Stop
 }
@@ -97,15 +97,14 @@ void calibrateSensors()
 void setup() {
   Serial.begin(9600);
   servo.attach(5);
-  calibrateSensors();
-  motors.setSpeeds(50, 50);
-  delay(3500);
-  servo.write(0);
-
   disp.setLayout21x8();
   disp.clear();
   disp.gotoXY(0, 0);
   disp.print(F("Trash: 0"));
+  calibrateSensors();
+  motors.setSpeeds(50, 50);
+  delay(3500);
+  servo.write(0);
 }
 
 void updateOdom() {
@@ -119,89 +118,69 @@ void updateOdom() {
   odometry.update_odom(encCountsLeft,encCountsRight, x, y, theta);
 }
 
-bool avoidObstacle(RobotState current_state){
-  if (path_distance >= 20) {
-    motors.setSpeeds(0, 0);
-    delay(250);
-    servo.write(90);  // Look forward
-    delay(250);
 
-    float read = sonar.readDist();
-
-    while (read < 10.0) {
-        read = sonar.readDist();
-        if(current_state == RIGHT_FOLLOW) {
-          motors.setSpeeds(-base_speed / 2, base_speed / 2);
-        } else if(current_state == LEFT_FOLLOW) {
-          read = sonar.readDist();
-          motors.setSpeeds(base_speed / 2, -base_speed / 2);
-        }
-        delay(500);
-        motors.setSpeeds(0, 0);
-        delay(100);
-    }
-
-    // Reset path distance after check
-    path_distance = 0.0;
-  }
-}
-
-bool collectTrash(RobotState current_state){
-  if (path_distance >= 20) {
-    motors.setSpeeds(0, 0);
-    delay(250);
-    servo.write(90);  // Look forward
-    delay(250);
-
-    float read = sonar.readDist();
-
-    while (read < 10.0) {
-        read = sonar.readDist();
-        if(current_state == RIGHT_FOLLOW) {
-          motors.setSpeeds(-base_speed / 2, base_speed / 2);
-        } else if(current_state == LEFT_FOLLOW) {
-          read = sonar.readDist();
-          motors.setSpeeds(base_speed / 2, -base_speed / 2);
-        }
-        delay(500);
-        motors.setSpeeds(0, 0);
-        delay(100);
-    }
-
-    // Reset path distance after check
-    path_distance = 0.0;
-  }
-}
 
 bool blackIrReading(){
-  lineSensors.readCalibrated(lineSensorValues);
-  int len = sizeof(lineSensorValues) / sizeof(lineSensorValues[0]);
 
-  for (int i = 0; i < len; i++) {
+  // Read sensor values
+  lineSensors.readCalibrated(lineSensorValues);
+  int count = 0;
+
+  // Count the number of sensors over 900 (reading a black square)
+  for (int i = 0; i < 5; i++) {
     if (lineSensorValues[i] > 900) {
-      return true;
+      count++;
     }
   }
-  return false;
 
+  // If more than 2 are getting these readings, a black square has been found
+  if (count >= 3) {
+    Serial.println("Black square detected.");
+    return true;
+  }
+
+  return false;
 }
 
+// Similar logic from the black square reading, but different range of values
 bool homeSquareReading() {
   lineSensors.readCalibrated(lineSensorValues);
-  int len = sizeof(lineSensorValues) / sizeof(lineSensorValues[0]);
+  int count = 0;
 
-  for (int i = 0; i < len; i++) {
-    if (lineSensorValues[i] > 110 && lineSensorValues[i] < 600) {
-      return true;
+  for (int i = 0; i < 5; i++) {
+    if (lineSensorValues[i] >= 120 && lineSensorValues[i] <= 200) {
+      count++;
     }
   }
+
+  if (count >= 3) {
+    Serial.println("Home square detected.");
+    return true;
+  }
+
   return false;
 }
 
 void loop() {
+
+  // If loop has ended play noise
+  if (end) {
+    motors.setSpeeds(0, 0);
+    pinMode(6, OUTPUT);
+    for (unsigned long t = millis(); millis() - t < 500;) {
+      digitalWrite(6, HIGH);
+      delayMicroseconds(568);
+      digitalWrite(6, LOW);
+      delayMicroseconds(568);
+    }
+    while (true);  // Halt
+  }
+  
+  // Loop through states
   while (!end) {
     updateOdom();
-
+    Serial.println(robot_state);
+    // Prints the current state
 
     // Keeps track of state changes previous and current
     if (robot_state != last_state) {
@@ -214,47 +193,61 @@ void loop() {
       trash_detection_enabled = true;
     }
 
+    if (!home_detection_enabled && !homeSquareReading()) {
+      home_detection_enabled = true;
+    }
+
+    
     switch (robot_state){
       case RIGHT_FOLLOW: {
+        // Face servo to the right
         servo.write(0);
+
+        // Calculations done to find the distance traveled
         float dx = x - prevx;
         float dy = y - prevy;
         float delta_dist = sqrt(dx * dx + dy * dy);
-
         path_distance += delta_dist;
-
         prevx = x;
         prevy = y;
 
-        if (trash_detection_enabled && blackIrReading()) {
-          motors.setSpeeds(0, 0);
-          delay(250);
-          trash_detection_enabled = false;  // disable any trash collection until after leaving black square
-          robot_state = COLLECT_TRASH;
-          return;
-        }
-
-        if (homeSquareReading()) {
-          motors.setSpeeds(0, 0);
-          delay(500);
-
-          robot_state = AT_HOME;
-          return;
-        }
-
-        if (path_distance >= 20) {
-          motors.setSpeeds(0, 0);
-          delay(250);
-          servo.write(90);  // Face forward
-          delay(250);
-          float read = sonar.readDist();
-          if (read < 10.0) {
-            robot_state = OBSTACLE_AVOIDANCE;
-            return;
+        // Around every 5 cm check for a black or home square
+        if (fmod(path_distance, 5) <= 1) {
+          if (trash_detection_enabled && blackIrReading()) {
+            motors.setSpeeds(0, 0);
+            delay(250);
+            trash_detection_enabled = false;  // disable any trash collection until after leaving black square
+            robot_state = COLLECT_TRASH;
+            break;
+          }
+          if (home_detection_enabled && homeSquareReading()) {
+            motors.setSpeeds(0, 0);
+            delay(250);
+            home_detection_enabled = false;   // disable any home detection until after leaving home square
+            robot_state = AT_HOME;
+            break;
           }
         }
+       
+        // Every 20cm have the servo face forward
+        if (path_distance >= 20) {
+          motors.setSpeeds(0, 0);
+          servo.write(90);
+          delay(100);
+          float read = sonar.readDist();
 
+          // If a wall is detected within 15cm switch to obstacle avoidance state
+          if (read < 15.0) {
+            robot_state = OBSTACLE_AVOIDANCE;
+            break;
+          }
+          // Reset distance traveled
+          path_distance = 0;
+        }
 
+        // Face servo right and start right wall following using PID Controller
+        servo.write(0);
+        delay(100);
         wallDist = sonar.readDist();
 
         double PIDout;
@@ -276,24 +269,28 @@ void loop() {
         motors.setSpeeds(left_speed, right_speed);
         break;
       }
+
       case OBSTACLE_AVOIDANCE: {
+        // Stop robot, and face servo forward
         motors.setSpeeds(0, 0);
         delay(250);
-        servo.write(90);  // Look forward
+        servo.write(90);
         delay(250);
 
+        // Take a reading
         float read = sonar.readDist();
-
-        while (read < 10.0) {
+        // while the reading is less than 15cm, turn right or left depending wheter right or left wall following
+        while (read < 15.0) {
             read = sonar.readDist();
 
             // Turn away from obstacle based on previous wall-following direction
             if (prev_state == RIGHT_FOLLOW) {
-              motors.setSpeeds(-base_speed / 2, base_speed / 2);  // Turn left
-            } else if (prev_state == LEFT_FOLLOW) {
-              motors.setSpeeds(base_speed / 2, -base_speed / 2);  // Turn right
+              motors.setSpeeds(-base_speed , base_speed );  // Turn left
+            } else if (prev_state == LEFT_FOLLOW || prev_state == RETURN_HOME) {
+              motors.setSpeeds(base_speed , -base_speed );  // Turn right
             }
-            delay(500);
+
+            delay(250);
             motors.setSpeeds(0, 0);
             delay(100);
         }
@@ -302,40 +299,26 @@ void loop() {
         path_distance = 0.0;
 
         // Resume wall following
-
-        robot_state = prev_state;  // Or LEFT_FOLLOW if you use left-side following
+        robot_state = prev_state;
         break;
       }
       case COLLECT_TRASH: {
+        // Stop robot, then do a 360deg turn
         motors.setSpeeds(0, 0);
         delay(250);
+        motors.setSpeeds(-base_speed, base_speed);
+        delay(2500);
 
-        // Set target theta to add 3 full turns or 6PI radians
-        float theta_start = theta;
-        float theta_target = theta_start + 6 * M_PI;
-
-        while (abs(theta - theta_target) > 0.05) {
-            updateOdom();  // Refresh current theta
-
-            float output = pid_ang_controller.update(theta, theta_target);
-            motors.setSpeeds(output, -output);
-
-            delay(10);
-        }
-
-        // Stop motors
-        motors.setSpeeds(0, 0);
-
+        // Increment the trash count and update the display
         trash_count++;
         disp.clear();
         disp.gotoXY(0, 0);
         disp.print(F("Trash: "));
         disp.print(trash_count);
 
-        delay(250);
-
-        // Resume previous behavior
-        if (trash_count == 3 && prev_state == LEFT_FOLLOW) {
+        // If trash is >= 3 and the prev state was left wall following, then
+        // return home, else go back to right or left wall following
+        if (trash_count >=  3 && prev_state == LEFT_FOLLOW) {
           return_turn_complete = false;  // Reset turn status
           robot_state = RETURN_HOME;
         } else {
@@ -344,38 +327,48 @@ void loop() {
         break;
       }
       case LEFT_FOLLOW: {
+        // Same as right, but for left wall
         servo.write(180);
         float dx = x - prevx;
         float dy = y - prevy;
         float delta_dist = sqrt(dx * dx + dy * dy);
-
         path_distance += delta_dist;
-
         prevx = x;
         prevy = y;
 
-        // Trash collection trigger
-        if (trash_detection_enabled && blackIrReading()) {
-          motors.setSpeeds(0, 0);
-          delay(250);
-          trash_detection_enabled = false;
-          robot_state = COLLECT_TRASH;
-          return;
-        }
+        
+        if (fmod(path_distance, 5) <= 1) {
+          if (trash_detection_enabled && blackIrReading()) {
+            motors.setSpeeds(0, 0);
+            delay(250);
+            trash_detection_enabled = false;
+            robot_state = COLLECT_TRASH;
+            break;
+          }
+          if (home_detection_enabled && homeSquareReading()) {
+            motors.setSpeeds(0, 0);
+            delay(500);
 
-
-        if (path_distance >= 20) {
-          motors.setSpeeds(0, 0);
-          delay(250);
-          servo.write(90);  // Look forward
-          delay(250);
-          float read = sonar.readDist();
-          if (read < 10.0) {
-            robot_state = OBSTACLE_AVOIDANCE;
-            return;
+            home_detection_enabled = false;
+            robot_state = AT_HOME;
+            break;
           }
         }
+        
+        if (path_distance >= 20) {
+          motors.setSpeeds(0, 0);
+          servo.write(90);  // Look forward
+          delay(100);
+          float read = sonar.readDist();
+          if (read < 15.0) {
+            robot_state = OBSTACLE_AVOIDANCE;
+            break;
+          }
+          path_distance = 0;
+        }
 
+        servo.write(180);
+        delay(200);
         wallDist = sonar.readDist();
         double PIDout = pid_vel_controller.update(wallDist, distFromWall);
 
@@ -396,22 +389,12 @@ void loop() {
         break;
       }
       case RETURN_HOME: {
+        // Once found 3rd trash in left wall follow, we do a 180deg turn once, then right wall follow to get back to home
         if (!return_turn_complete) {
-          // Do 180-degree turn
-          float theta_start = theta;
-          float theta_target = theta_start + M_PI;
-
-          while (abs(theta - theta_target) > 0.05) {
-            updateOdom();
-            float output = pid_ang_controller.update(theta, theta_target);
-            motors.setSpeeds(output, -output);
-            delay(10);
-          }
-
-          motors.setSpeeds(0, 0);
-          delay(250);
+        motors.setSpeeds(-base_speed, base_speed);
+        delay(1300);
           return_turn_complete = true;
-          return;  // Wait for next loop iteration to start wall follow
+          break;  // Wait for next loop iteration to start wall follow
         }
 
         // Right wall-following to home
@@ -423,11 +406,10 @@ void loop() {
         prevx = x;
         prevy = y;
 
+        // Dont scan for trash anymore, just home
         if (homeSquareReading()) {
-          motors.setSpeeds(0, 0);
-          delay(500);
-          robot_state = AT_HOME;
-          return;
+          robot_state = AT_HOME; 
+          break;
         }
 
         if (path_distance >= 20) {
@@ -436,12 +418,12 @@ void loop() {
           servo.write(90);
           delay(250);
           float read = sonar.readDist();
-          if (read < 10.0) {
+          if (read < 15.0) {
             robot_state = OBSTACLE_AVOIDANCE;
-            return;
+            break;
           }
         }
-
+        servo.write(0);
         wallDist = sonar.readDist();
         double PIDout = pid_vel_controller.update(wallDist, distFromWall);
 
@@ -463,11 +445,12 @@ void loop() {
       }
 
       case AT_HOME: {
-          if (trash_count >= 3) {
-            end = true;
-          } else {
-            robot_state = LEFT_FOLLOW;
-          }
+        // If robot is at home, check for trash count, if greater than 3 stop, else do left wall following to keep looking
+        if (trash_count >= 3){
+          end = true;
+        } else {
+          robot_state = LEFT_FOLLOW;
+        }
         break;
       }
     }
