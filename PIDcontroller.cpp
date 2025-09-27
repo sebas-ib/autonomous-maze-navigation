@@ -26,46 +26,34 @@ PIDcontroller::PIDcontroller(float kp, float ki, float kd, double minOutput, dou
 }
 
 double PIDcontroller::update(double value, double target_value){
-  /*Now copy and paste your PD controller. To implement I component,
-  keep track of accumulated error, use your accumulated error in the constrain
-  function for the integral, multiply ki by your integral, then add your p, d,
-  and i components.
-  
-  Note: Do not just put all of the integral code at the end of PD component. Think
-  about step by step how you can integrate these parts into your PDController
-  code.*/
-
-  // compute the error
+  // error
   _error = target_value - value;
 
-  // compute dt
+  // dt in seconds (guard against zero)
   _curr_time = millis();
-  float dt = (_curr_time - _prev_time);
-
-
+  unsigned long elapsed_ms = _curr_time - _prev_time;
+  double dt = elapsed_ms / 1000.0;    // convert ms → s
   _prev_time = _curr_time;
 
-  // the proportional Term
+  // P term
   _proportionalOut = _kp * _error;
 
-  // integral
-  _accumulated_error += _error * dt;  // sum of error over time
-  _accumulated_error = constrain(_accumulated_error, -_clamp_i, _clamp_i); 
-  _integralOut = _ki * _accumulated_error; 
+  // I term (accumulate only when dt > 0)
+  if (dt > 0.0) {
+    _accumulated_error += _error * dt;
+    _accumulated_error = constrain(_accumulated_error, -_clamp_i, _clamp_i);
+  }
+  _integralOut = _ki * _accumulated_error;
 
+  // D term (safe if dt == 0)
+  double de = _error - _previous_error;
+  _derivativeOut = (dt > 0.0) ? _kd * (de / dt) : 0.0;
 
-  // derivative term
-  float de = _error - _previous_error;
-  _derivativeOut = _kd * (de / dt);
-
-  
-
-  // combine terms and constrain
+  // Sum & clamp
   _clampOut = constrain(_proportionalOut + _integralOut + _derivativeOut, _minOutput, _maxOutput);
 
-  // update previous error for next cycle
+  // keep for next cycle
   _previous_error = _error;
 
   return _clampOut;
-
 }

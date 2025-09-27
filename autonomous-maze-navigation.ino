@@ -59,6 +59,8 @@ float prevx = 0;
 float prevy = 0;
 
 float path_distance = 0.0;
+float next_tile_check_distance = 5.0;
+
 
 const double distFromWall=10.0; 
 unsigned int lineSensorValues[5];
@@ -186,6 +188,9 @@ void loop() {
     if (robot_state != last_state) {
       prev_state = last_state;
       last_state = robot_state;
+      if (robot_state == RIGHT_FOLLOW || robot_state == LEFT_FOLLOW) {
+        next_tile_check_distance = 5.0;
+      }
     }
 
     // This is so we dont collect trash until after we have left a black square
@@ -211,8 +216,9 @@ void loop() {
         prevx = x;
         prevy = y;
 
-        // Around every 5 cm check for a black or home square
-        if (fmod(path_distance, 5) <= 1) {
+        // Single-shot check each time we pass the next 5 cm mark
+        if (path_distance >= next_tile_check_distance) {
+          next_tile_check_distance += 5.0;
           if (trash_detection_enabled && blackIrReading()) {
             motors.setSpeeds(0, 0);
             delay(250);
@@ -241,8 +247,8 @@ void loop() {
             robot_state = OBSTACLE_AVOIDANCE;
             break;
           }
-          // Reset distance traveled
           path_distance = 0;
+          next_tile_check_distance = 5.0;
         }
 
         // Face servo right and start right wall following using PID Controller
@@ -279,10 +285,8 @@ void loop() {
 
         // Take a reading
         float read = sonar.readDist();
-        // while the reading is less than 15cm, turn right or left depending wheter right or left wall following
+        // while the reading is less than 15cm, turn right or left depending whether right or left wall following
         while (read < 15.0) {
-            read = sonar.readDist();
-
             // Turn away from obstacle based on previous wall-following direction
             if (prev_state == RIGHT_FOLLOW) {
               motors.setSpeeds(-base_speed , base_speed );  // Turn left
@@ -293,10 +297,12 @@ void loop() {
             delay(250);
             motors.setSpeeds(0, 0);
             delay(100);
+            read = sonar.readDist();  // re-measure after turning
         }
 
-        // Reset distance traveled
+        // Reset distance traveled & 5cm trigger
         path_distance = 0.0;
+        next_tile_check_distance = 5.0;
 
         // Resume wall following
         robot_state = prev_state;
@@ -337,7 +343,8 @@ void loop() {
         prevy = y;
 
         
-        if (fmod(path_distance, 5) <= 1) {
+        if (path_distance >= next_tile_check_distance) {
+          next_tile_check_distance += 5.0;
           if (trash_detection_enabled && blackIrReading()) {
             motors.setSpeeds(0, 0);
             delay(250);
@@ -354,6 +361,7 @@ void loop() {
             break;
           }
         }
+
         
         if (path_distance >= 20) {
           motors.setSpeeds(0, 0);
@@ -365,6 +373,7 @@ void loop() {
             break;
           }
           path_distance = 0;
+          next_tile_check_distance = 5.0;
         }
 
         servo.write(180);
@@ -391,8 +400,9 @@ void loop() {
       case RETURN_HOME: {
         // Once found 3rd trash in left wall follow, we do a 180deg turn once, then right wall follow to get back to home
         if (!return_turn_complete) {
-        motors.setSpeeds(-base_speed, base_speed);
-        delay(1300);
+          motors.setSpeeds(-base_speed, base_speed);
+          delay(1300);
+          motors.setSpeeds(0, 0);      // stop immediately after turn
           return_turn_complete = true;
           break;  // Wait for next loop iteration to start wall follow
         }
@@ -422,6 +432,8 @@ void loop() {
             robot_state = OBSTACLE_AVOIDANCE;
             break;
           }
+          path_distance = 0;
+          next_tile_check_distance = 5.0;
         }
         servo.write(0);
         wallDist = sonar.readDist();
